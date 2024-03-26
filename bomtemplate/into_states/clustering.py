@@ -51,7 +51,7 @@ def get_laplacian_eigenvs(v1s, n_init_clusters):
     return km, (init_centroids, init_labels), (k_evals, k_evecs)
 
 
-class LeidaCenSC(BaseEstimator):
+class LeidaCenSC(BaseEstimator, TransformerMixin):
 
     def __init__(self, demo_param='demo_param', n_states=None, n_init_clusters=100):
         self.demo_param = demo_param
@@ -59,35 +59,56 @@ class LeidaCenSC(BaseEstimator):
         self.n_init_clusters = n_init_clusters
     
     def fit(self, X, y=None):
-        if X.ndim == 3:
-            n_participants, n_samples, self.n_nodes = X.shape
-            X = X.reshape(-1, self.n_nodes)
-        elif X.ndim == 2:
-            n_concat_samples, self.n_nodes = X.shape
+        self.X = X
+        if self.X.ndim == 3:
+            self.n_participants, self.n_samples, self.n_nodes = self.X.shape
+            self.X = self.X.reshape(-1, self.n_nodes)
+        elif self.X.ndim == 2:
+            self.n_concat_samples, self.n_nodes = self.X.shape
         else:
             raise ValueError('worng `X` (namely `v1s`) input dimenions')
-        assert X.ndim == 2
+        assert self.X.ndim == 2
         # Return the transformer
-        self.km, init_km, k_evs = get_laplacian_eigenvs(X, n_init_clusters=self.n_init_clusters) # random initializations matter within minibatchkmeans for getting the centorids
+        return self
+    
+    def transform(self, X):
+        '''returns the k eigenvectors of the graph laplacian,
+        which is constructed from a similarity matrix of the initial centroids.
+        k_evecs[:,i] corresponds to the i_th eigenvalue (`.k_evals`)
+        '''
+        check_is_fitted(self, 'X')
+        # Input validation
+        if X.shape[-1] != self.n_nodes:
+            raise ValueError('Shape of input is different from what was seen'
+                             'in `fit`')
+        self.km, init_km, k_evs = get_laplacian_eigenvs(self.X, n_init_clusters=self.n_init_clusters) # random initializations matter within minibatchkmeans for getting the centorids
         self.init_centroids, self.init_labels = init_km
         self.k_evals, k_evecs = k_evs
-        return self, k_evecs
-
-    def transform(self, k_evecs):
-        '''feed the first k eigenvectors from `fit` output (k_evecs) to get the final labels'''
-        check_is_fitted(self, 'km')
         n_states_calculated = np.argsort(np.diff(np.diff(self.k_evals[1:])))[:4] + 1 + 1 # the best two candidates
         if self.n_states == None or self.n_states == 'best':
             self.n_states = n_states_calculated[0]
         elif self.n_states == 'max_n_states':
             self.n_states = n_states_calculated.max()
         self.n_states = int(self.n_states)
+        return k_evecs
+
+    def predict(self, k_evecs):
+        '''uses as input the k eigenvectors, i.e. `k_evecs`.
+        Normalizes them and performs KMeans clustering, that
+        predicts cluster labels for the centroids, stored in the
+        `.states_centroids_dict`.
+        Subsequently, it finds the final labels of the time points.
+        Returns
+        -------
+        labels_: array
+        '''
+        check_is_fitted(self, 'km')
         se_vectors = k_evecs[:,1:self.n_states+1].copy()               # ignore 0th vector for the spectral embedding
-        se_vectors /= np.linalg.norm(se_vectors, axis=-1)[:,None]  # get the spectral embedding vectors
+        se_vectors /= np.linalg.norm(se_vectors, axis=-1)[:,None]      # get the spectral embedding vectors
         # and apply kmeans over the spectral embedding
         km_se = KMeans(n_clusters=self.n_states, n_init='auto').fit(se_vectors)        
         se_labels = km_se.labels_.astype('i')
-        se_centroids = km_se.cluster_centers_
+        # se_centroids = km_se.cluster_centers_
         # this clusters the centroids into n_states
         self.states_centroids_dict = {value: numpy.where(se_labels == value)[0] for value in numpy.unique(se_labels)}
         # subsequently, this assigns the init_labels to the clustered centroids
@@ -98,16 +119,19 @@ class LeidaCenSC(BaseEstimator):
             self.labels_[k] = v
         return self.labels_
 
-    def predict(self, X):
+    def predict_on_unseen(self, X):
+        '''use the unseen data to predict their labels'''
         check_is_fitted(self, 'labels_')
+        if X.shape[-1] != self.n_nodes:
+            raise ValueError('Shape of input is different from what was seen'
+                             'in `fit`')
         if X.ndim == 3:
-            n_participants, n_samples, n_nodes_ = X.shape
+            _, _, n_nodes_ = X.shape
             X = X.reshape(-1, n_nodes_)
         elif X.ndim == 2:
-            n_concat_samples, n_nodes_ = X.shape
+            _, n_nodes_ = X.shape
         else:
             raise ValueError('worng `X` (namely `v1s`) input dimenions')
-        assert n_nodes_ == self.n_nodes
         test_labels = self.km.predict(X)
         states_testsamples_dict = {v: np.nonzero(np.isin(test_labels, k))[0] for v,k in self.states_centroids_dict.items()}
         test_labels_ = numpy.empty_like(test_labels)

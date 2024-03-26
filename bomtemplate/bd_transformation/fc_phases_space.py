@@ -38,7 +38,7 @@ def FC_stream_phases(x):
 
 class Zudah(TransformerMixin, BaseEstimator):
 
-    def __init__(self, demo_param='demo_param'):
+    def __init__(self, demo_param='demo_param'): # add option on which axis to z-score 
         self.demo_param = demo_param
     
     def fit(self, X, y=None):
@@ -58,25 +58,35 @@ class Zudah(TransformerMixin, BaseEstimator):
         nonzero_idx = np.nonzero(mask)
         udah = dah[..., nonzero_idx[0], nonzero_idx[1]]
         zudah = jax.jit(jax.vmap(jax.vmap(utility.z_score, in_axes=0), in_axes=0))(udah)
+        # asserts whether by averaging out the last axis, the mean values for each sample (axis=1) is 0
+        numpy.testing.assert_allclose(zudah.mean(-1),  0, atol=1e-5) 
         self.n_features = zudah.shape[-1]
         return zudah
     
-class Flipping_Methods:
-    
+class Flipping_Methods: 
     def __init__(self, v1):
-        self.v1 = v1
+        self.v1 = v1 
     
     def meanK(self):
-        if np.mean(self.v1>0)>0.5:
-            self.v1=-1*self.v1
-        elif np.mean(self.v1>0)==.5 and np.sum(self.v1[(self.v1>0)])>-np.sum(self.v1[(self.v1<0)]):
-            self.v1=-1*self.v1
-        return self.v1
+        v1_pos = self.v1 > 0
+        mean_v1_pos = np.mean(v1_pos)
+        sum_v1_pos = np.where(self.v1 > 0, self.v1, 0).sum()
+        sum_v1_neg = np.where(self.v1 < 0, self.v1, 0).sum()
+        condition = (mean_v1_pos > 0.5) | ((mean_v1_pos == 0.5) & (sum_v1_pos > -sum_v1_neg))
+        return np.where(condition, -1*self.v1, self.v1)
     
     def meanO(self):
-        if np.mean(self.v1>0)>0.5:
-            self.v1=-1*self.v1
-        return self.v1
+        return np.where(np.mean(self.v1>0)>0.5, -1*self.v1, self.v1)
+    
+    def anchor(self, anchor):
+        return np.where(self.v1[anchor] > 0, -1*self.v1, self.v1)
+    
+    def markov(self, v_init, v1s): #2-dimensional input -- used with jax.lax.scan
+        assert v1s.ndim == 2
+        dotprod = v_init @ v1s
+        s = np.sign(dotprod)
+        v1s *= s
+        return v1s, v1s
         
 
 class V1s(TransformerMixin, BaseEstimator):
@@ -111,39 +121,29 @@ class V1s(TransformerMixin, BaseEstimator):
         '''
         check_is_fitted(self, 'v1s')
         options = {'meanK', 'meanO', 'anchor', 'markov'}
-        fm = Flipping_Methods()
         if option == 'meanK':
-            # superslow -- kringelbach: https://github.com/decolab/pnas-neuromod/blob/master/LEiDA_PsiloData.m
-            v1s_flipped = np.zeros_like(self.v1s)
-            for p in tqdm(range(self.n_participants)):
-                for s in range(self.n_samples):
-                    v1 = self.v1s[p,s,:].copy()
-                    v1 = ...
-                    v1s_flipped = v1s_flipped.at[p,s,:].set(v1)
+            # kringelbach: https://github.com/decolab/pnas-neuromod/blob/master/LEiDA_PsiloData.m
+            wrapper = lambda x: Flipping_Methods(x).meanK()
+            v1s_flipped = jax.vmap(jax.vmap(wrapper, in_axes=0), in_axes=0)(self.v1s)
         elif option == 'meanO':
-            # superslow -- olsen: https://github.com/anders-s-olsen/psilocybin_dynamic_FC/blob/main/pdfc_compute_eigenvectors.m
-            v1s_flipped = np.zeros_like(self.v1s)
-            for p in tqdm(range(self.n_participants)):
-                for s in range(self.n_samples):
-                    v1 = self.v1s[p,s,:].copy()
-                    v1 = ...
-                    v1s_flipped = v1s_flipped.at[p,s,:].set(v1)
+            # olsen: https://github.com/anders-s-olsen/psilocybin_dynamic_FC/blob/main/pdfc_compute_eigenvectors.m
+            wrapper = lambda x: Flipping_Methods(x).meanO()
+            v1s_flipped = jax.vmap(jax.vmap(wrapper, in_axes=0), in_axes=0)(self.v1s)
         elif option == 'anchor':
+            # flip vectors based on the sign of an anchor node derived from the data FC sum
             anchor = utility.get_anchor_node(self.X)
-            v1s_flipped = np.where(self.v1s[...,anchor][...,None] > 0, -1*self.v1s, self.v1s)
+            wrapper = lambda x: Flipping_Methods(x).anchor(anchor)
+            v1s_flipped = jax.vmap(jax.vmap(wrapper, in_axes=0), in_axes=0)(self.v1s)
         elif option == 'markov':
+            # flip vectors sequentially making sure that the dotproduct of 2 successive vectors is always positive 
             anchor = utility.get_anchor_node(self.X)
             first_v1s = self.v1s[:,0,:].copy()
             first_v1s = np.where(first_v1s[:,anchor][:,None] > 0, -1*first_v1s, first_v1s)
             v1s_for_flip = np.concatenate((first_v1s[:,None,:], self.v1s[:,1:,:]), axis=1)
-            # slow
-            v1s_flipped = np.zeros_like(v1s_for_flip)
-            for p in tqdm(range(self.n_participants)):
-                v1 = np.array(v1s_for_flip[p,...].copy())
-                for ti in range(1,self.n_samples):
-                    s = np.sign(v1[ti-1,:] @ v1[ti,:])
-                    v1 = v1.at[ti].set(v1[ti]*s)
-                v1s_flipped = v1s_flipped.at[p,...].set(v1)
+            fun = lambda a,b: Flipping_Methods(None).markov(a,b) # input for lax.scan
+            v_init = np.ones(self.v1s.shape[-1])                 # initialization for lax.scan
+            wrapper = lambda v1s: jax.lax.scan(fun, v_init, v1s)[1]
+            v1s_flipped = jax.jit(jax.vmap(wrapper))(v1s_for_flip)
         else:
             raise ValueError(
                 f"Invalid flipping option: {option}. Please choose from {options}.")
