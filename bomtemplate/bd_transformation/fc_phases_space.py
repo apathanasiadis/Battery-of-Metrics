@@ -81,8 +81,7 @@ class Flipping_Methods:
     def anchor(self, anchor):
         return np.where(self.v1[anchor] > 0, -1*self.v1, self.v1)
     
-    def markov(self, v_init, v1s): #2-dimensional input -- used with jax.lax.scan
-        assert v1s.ndim == 2
+    def markov(self, v_init, v1s): # used with jax.lax.scan
         dotprod = v_init @ v1s
         s = np.sign(dotprod)
         v1s *= s

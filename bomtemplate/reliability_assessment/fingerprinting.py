@@ -2,7 +2,7 @@ import jax
 import jax.numpy as np
 import numpy
 import scipy
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
 from sklearn.utils.multiclass import unique_labels
 from tqdm import tqdm
@@ -17,7 +17,7 @@ cossim = lambda a, b: np.dot(a, b)/(np.linalg.norm(a)*np.linalg.norm(b))
 
 test_statistic = lambda d1, d2: d1.mean() - d2.mean()
 
-class Fingerprinting(BaseEstimator):
+class Fingerprinting(BaseEstimator, TransformerMixin): #TOFIX: fit_transform doesnt work!
 
     def __init__(self, demo_param='demo_param'):
         self.demo_param = demo_param
