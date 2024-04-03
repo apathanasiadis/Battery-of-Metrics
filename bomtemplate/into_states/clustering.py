@@ -20,7 +20,7 @@ def get_similarity(centroids):
     similarity = np.abs(centroids @ centroids.T)
     return similarity
 
-def get_laplacian_eigenvs(v1s, n_init_clusters, init='k-means++'):
+def get_laplacian_eigenvs(v1s, n_init_clusters, init='k-means++', random_state=None):
     '''
     Inputs
     ---------------------------
@@ -39,7 +39,7 @@ def get_laplacian_eigenvs(v1s, n_init_clusters, init='k-means++'):
         following the scheme of `np.linalg.eigh`.
     '''
     assert v1s.ndim == 2
-    km = MiniBatchKMeans(n_clusters=n_init_clusters, init=init, n_init='auto')#, random_state=rs)
+    km = MiniBatchKMeans(n_clusters=n_init_clusters, init=init, n_init='auto', random_state=random_state)
     # print(v1s.shape)
     km.fit(v1s)
     init_centroids = km.cluster_centers_
@@ -53,11 +53,12 @@ def get_laplacian_eigenvs(v1s, n_init_clusters, init='k-means++'):
 
 class LeidaCenSC(BaseEstimator, TransformerMixin):
 
-    def __init__(self, demo_param='demo_param', n_states=None, n_init_clusters=100, init='k-means++'):
+    def __init__(self, demo_param='demo_param', n_states=None, n_init_clusters=100, init='k-means++', seed = None):
         self.demo_param = demo_param
         self.n_states = n_states
         self.n_init_clusters = n_init_clusters
         self.init = init
+        self.seed = seed
     
     def fit(self, X, y=None):
         self.X = X
@@ -82,18 +83,19 @@ class LeidaCenSC(BaseEstimator, TransformerMixin):
         if X.shape[-1] != self.n_nodes:
             raise ValueError('Shape of input is different from what was seen'
                              'in `fit`')
-        self.km, init_km, k_evs = get_laplacian_eigenvs(self.X, n_init_clusters=self.n_init_clusters, init=self.init) # random initializations matter within minibatchkmeans for getting the centorids
+        self.km, init_km, k_evs = get_laplacian_eigenvs(self.X, n_init_clusters=self.n_init_clusters, init=self.init,
+                                                        random_state = self.seed) # random initializations matter within minibatchkmeans for getting the centorids
         self.init_centroids, self.init_labels = init_km
         self.k_evals, k_evecs = k_evs
-        n_states_calculated = np.argsort(np.diff(np.diff(self.k_evals[1:])))[:4] + 1 + 1 # the best two candidates
+        self.n_states_calculated = np.argsort(np.diff(np.diff(self.k_evals[1:])))[:4] + 1 + 1 # the best two candidates
         if self.n_states == None or self.n_states == 'best':
-            self.n_states = n_states_calculated[0]
+            self.n_states = self.n_states_calculated[0]
         elif self.n_states == 'max_n_states':
-            self.n_states = n_states_calculated.max()
+            self.n_states = self.n_states_calculated.max()
         self.n_states = int(self.n_states)
         return k_evecs
 
-    def predict(self, k_evecs):
+    def predict(self, k_evecs, new_states = None):
         '''uses as input the k eigenvectors, i.e. `k_evecs`.
         Normalizes them and performs KMeans clustering, that
         predicts cluster labels for the centroids, stored in the
@@ -104,10 +106,12 @@ class LeidaCenSC(BaseEstimator, TransformerMixin):
         labels_: array
         '''
         check_is_fitted(self, 'km')
+        if not isinstance(new_states, type(None)):
+            self.n_states = new_states
         se_vectors = k_evecs[:,1:self.n_states+1].copy()               # ignore 0th vector for the spectral embedding
         se_vectors /= np.linalg.norm(se_vectors, axis=-1)[:,None]      # get the spectral embedding vectors
         # and apply kmeans over the spectral embedding
-        km_se = KMeans(n_clusters=self.n_states, n_init='auto').fit(se_vectors)        
+        km_se = KMeans(n_clusters=self.n_states, n_init='auto', random_state=self.seed).fit(se_vectors)        
         se_labels = km_se.labels_.astype('i')
         # se_centroids = km_se.cluster_centers_
         # this clusters the centroids into n_states

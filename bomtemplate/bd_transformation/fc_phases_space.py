@@ -90,8 +90,9 @@ class Flipping_Methods:
 
 class V1s(TransformerMixin, BaseEstimator):
 
-    def __init__(self, demo_param='demo_param'):
+    def __init__(self, demo_param='demo_param', return_evals = False):
         self.demo_param = demo_param
+        self.return_evals = return_evals
     
     def fit(self, X, y=None):
         '''following the standard sklearn procedute to get the estimator'''
@@ -107,9 +108,12 @@ class V1s(TransformerMixin, BaseEstimator):
         '''transform yields the v1s array'''
         dah = jax.vmap(FC_stream_phases, in_axes=0)(X)
         numpy.testing.assert_(dah.ndim == 4)
-        _, evecs = np.linalg.eigh(dah)
+        evals, evecs = np.linalg.eigh(dah)
         self.v1s = evecs[...,-1]
-        return self.v1s
+        if not self.return_evals:
+            return self.v1s
+        else:
+            return self.v1s, evals[...,-1]
     
     def flip_v1s(self, option='markov'):
         '''
