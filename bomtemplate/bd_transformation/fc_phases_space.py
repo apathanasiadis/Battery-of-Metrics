@@ -30,7 +30,7 @@ def hilbert(x, N=None, axis=-1):
     x = np.fft.ifft(Xf * h, axis=axis)
     return x
 
-
+# Zudah ################
 def FC_stream_phases(x):
     ah = np.angle(jax.vmap(hilbert)(x))
     dah = np.cos(jax.vmap(lambda a: a - a[:,None])(ah))
@@ -62,7 +62,8 @@ class Zudah(TransformerMixin, BaseEstimator):
         numpy.testing.assert_allclose(zudah.mean(-1),  0, atol=1e-5) 
         self.n_features = zudah.shape[-1]
         return zudah
-    
+
+# V1s ##################   
 class Flipping_Methods: 
     def __init__(self, v1):
         self.v1 = v1 
@@ -151,6 +152,84 @@ class V1s(TransformerMixin, BaseEstimator):
             raise ValueError(
                 f"Invalid flipping option: {option}. Please choose from {options}.")
         return v1s_flipped
+    
 
 
+#EiDA ############################
+def get_cs(x, return_iPL = False):
+    ah = np.angle(hilbert(x))
+    cah = np.cos(ah)
+    sah = np.sin(ah)
+    if return_iPL:
+        pcah = cah[:,None] @ cah[None,:]
+        psah = sah[:,None] @ sah[None,:]
+        iPL = pcah@pcah.T + psah@psah.T
+        return ah, cah, sah, iPL
+    else:
+        return ah, cah, sah
+
+def do_analytics(c, s):
+    y = np.linalg.norm(c)
+    o = np.linalg.norm(s)
+    j = c.T @ s
+    D = (y-o)**2 + 4*y**2
+    sol = lambda D: ((y-o) + D)/(2*j)
+    B1 = sol(np.sqrt(D))
+    B2 = sol(-np.sqrt(D))
+    # get v1, v2
+    v1 = c+B1*s
+    v2 = c+B2*s
+    v1 /= np.linalg.norm(v1)
+    v2 /= np.linalg.norm(v2)
+    # get l1, l2
+    l1 = o + j/B1
+    l2 = o + j/B2
+    return (l1, v1), (l2, v2)  
+
+
+class Eida(TransformerMixin, BaseEstimator):
+
+    def __init__(self, demo_param='demo_param', return_iPL = False): # add option on which axis to z-score 
+        self.demo_param = demo_param
+        self.return_iPL = return_iPL
+    
+    def fit(self, X, y=None):
+        if X.ndim == 3:
+            self.n_participants, self.n_samples, self.n_nodes = X.shape      
+        else:
+            raise ValueError('ndim of input != 3.')
+
+        # Return the transformer
+        return self
+    
+    def transform(self, X):
+        numpy.testing.assert_(X.ndim == 3)
+        if self.return_iPL:
+            self.ah, self.cah, self.sah, iPL = jax.vmap(jax.vmap(get_cs, in_axes=(0,None)), in_axes=(0,None))(X, self.return_iPL)
+            (self.l1, self.v1), (self.l2, self.v2) =  jax.vmap(jax.vmap(do_analytics))(self.cah, self.sah)
+            return np.stack((self.l1, self.l2)), np.stack((self.v1, self.v2)), iPL        
+        else:
+            self.ah, self.cah, self.sah = jax.vmap(jax.vmap(get_cs, in_axes=(0,None)), in_axes=(0,None))(X, self.return_iPL)
+            (self.l1, self.v1), (self.l2, self.v2) =  jax.vmap(jax.vmap(do_analytics))(self.cah, self.sah)        
+            return np.stack((self.l1, self.l2)), np.stack((self.v1, self.v2))
+    
+    def spectral_radius(self):
+        return np.stack((self.l1.mean(axis=-1), self.l2.mean(axis=-1)))
+    
+    def spectral_metastability(self):
+        return self.l1.std(axis=-1)
+    
+    def kuramoto_metastability(self):
+        return np.abs(self.ah).mean(-1).std(-1)
+    
+    def reconfiguration_speed(self, iPL):
+            '''input: iPL matrix (3d);
+            returns: reconfiguration speed
+            utilize its mean or std'''
+            numpy.testing.assert_(iPL.ndim == 3)
+            ut = np.triu_indices(self.n_nodes, k=1)
+            iPL = iPL[:,ut[0], ut[1]]
+            s = lambda iPL, jPL: 1 - np.abs(np.corrcoef(iPL, jPL))[1,0]
+            reconf_speed = jax.vmap(s)(iPL[:-1], iPL[1:])
+            return reconf_speed
 

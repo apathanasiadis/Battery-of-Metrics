@@ -1,6 +1,6 @@
 
 
-def test_pp_LeidaCenSC(k_evecs, xtest, n_states, ages, train_idx, test_idx):
+def test_pp_LeidaCenSC(est, k_evecs, xtest, n_states, ages, train_idx, test_idx):
     trlab = est.predict(k_evecs, n_states)
     telab = est.predict_on_unseen(xtest)
     trlab  = trlab.reshape(train_idx.size,-1)
@@ -13,6 +13,18 @@ def test_pp_LeidaCenSC(k_evecs, xtest, n_states, ages, train_idx, test_idx):
     pp.fit(tror, y)
     predictors, r_values, p_values = pp.predict(teor, ages[test_idx])
     return tror, predictors, r_values, p_values
+
+def test_fp_LeidaCenSC(est, k_evecs, xretest, n_states, num_permutations=1000):
+    trlab = est.predict(k_evecs, n_states)
+    telab = est.predict_on_unseen(xretest)
+    trlab  = trlab.reshape(n_participants,-1)
+    telab  = telab.reshape(n_participants,-1)
+    fp = fingerprinting.Fingerprinting()
+    fp.fit(trlab, telab)
+    Xor, yor = fp.transform(trlab, telab)
+    permst, obsst, pv = fp.score_intrasim_vs_intrasim(num_permutations=num_permutations)
+    diff = fp.intrasim.mean() - fp.intersim.mean()
+    return diff
 
 # getting recurrent objects for xtrain
 def test_pp(xtrain, xtest, n_states, ages, train_idx, test_idx, random_state=seed):
