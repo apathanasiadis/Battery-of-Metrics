@@ -9,6 +9,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.swp
 
 # scikit-learn specific
 doc/_build/
